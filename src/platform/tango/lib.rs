@@ -38,7 +38,16 @@ pub unsafe fn init<'a>() -> &'a mut Firestorm {
         Clock::new(PeripheralClock::Bank0(PeripheralClock0::Gpio0)).enable();
         let pinmux = &mut *hotel::pinmux::PINMUX;
         pinmux.diom4.select.set(hotel::pinmux::Function::Gpio0Gpio0);
+
+        Clock::new(PeripheralClock::Bank0(PeripheralClock0::Sps0)).enable();
+        pinmux.dioa2.control.set_bit(2);
+        pinmux.dioa6.control.set_bit(2);
+        pinmux.dioa10.control.clear_bit(2);
+        pinmux.dioa12.control.set_bit(2);
     }
+
+    let sps = hotel::sps::SPS::new();
+    sps.configure(hil::spi_master::ClockPhase::SampleTrailing, hil::spi_master::ClockPolarity::IdleHigh, hil::spi_master::DataOrder::LSBFirst);
 
     static_init!(gpio_pins : [&'static hotel::gpio::GPIOPin; 1] =
         [ &hotel::gpio::PORT0.pins[0] ]

@@ -1,7 +1,7 @@
 #![crate_name = "hotel"]
 #![crate_type = "rlib"]
 #![no_std]
-#![feature(asm,const_fn)]
+#![feature(asm,clone_from_slice,const_fn)]
 
 extern crate common;
 extern crate hil;
@@ -10,6 +10,7 @@ extern crate support;
 pub mod gpio;
 pub mod pinmux;
 pub mod pmu;
+pub mod sps;
 pub mod uart;
 
 unsafe extern "C" fn unhandled_interrupt() {

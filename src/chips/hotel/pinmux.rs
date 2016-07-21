@@ -1,8 +1,30 @@
 use common::volatile_cell::VolatileCell;
 
+pub struct Control(VolatileCell<u32>);
+
+impl Control {
+    pub fn set(&self, val: u32) {
+        self.0.set(val)
+    }
+
+    pub fn get(&self) -> u32 {
+        self.0.get()
+    }
+
+    pub fn set_bit(&self, bit: usize) {
+        let old = self.0.get();
+        self.0.set(old | (1 << bit))
+    }
+
+    pub fn clear_bit(&self, bit: usize) {
+        let old = self.0.get();
+        self.0.set(old & !(1 << bit))
+    }
+}
+
 pub struct Pin {
     pub select: VolatileCell<Function>,
-    pub control: VolatileCell<u32>
+    pub control: Control
 }
 
 pub struct Registers {
