@@ -355,6 +355,7 @@ impl<'a> Process<'a> {
 
 }
 
+#[derive(Debug)]
 struct LoadResult {
     text_start: *const u8,
     text_len: usize,
