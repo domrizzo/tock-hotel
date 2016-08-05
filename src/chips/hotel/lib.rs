@@ -75,6 +75,7 @@ pub static ISR_VECTOR: [Option<unsafe extern fn()>; 16] = [
 ];
 
 #[link_section=".vectors"]
+#[no_mangle]
 pub static IRQS: [unsafe extern fn(); 0] = [generic_isr; 0];
 
 #[no_mangle]
