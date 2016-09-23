@@ -1,7 +1,6 @@
 use core::cell::Cell;
-use hotel::hil::digest::{DigestEngine, DigestMode, SyscallError};
-use kernel::{AppId, AppSlice, Container, Driver, Shared};
-use kernel::common::take_cell::TakeCell;
+use hotel::hil::digest::{Client, DigestEngine, DigestMode, SyscallError};
+use kernel::{AppId, AppSlice, Callback, Container, Driver, Shared};
 
 /// Per-application driver data.
 pub struct AppData {
@@ -9,6 +8,7 @@ pub struct AppData {
     input_buffer: Option<AppSlice<Shared, u8>>,
     /// Buffer where the digest will be written to when hashing is finished.
     output_buffer: Option<AppSlice<Shared, u8>>,
+    callback: Option<Callback>,
 }
 
 impl Default for AppData {
@@ -16,27 +16,62 @@ impl Default for AppData {
         AppData {
             input_buffer: None,
             output_buffer: None,
+            callback: None,
         }
     }
 }
 
 pub struct DigestDriver<'a, E: DigestEngine + 'a> {
-    engine: TakeCell<&'a mut E>,
+    engine: &'a E,
     apps: Container<AppData>,
     current_user: Cell<Option<AppId>>,
 }
 
 impl<'a, E: DigestEngine + 'a> DigestDriver<'a, E> {
-    pub fn new(engine: &'a mut E, container: Container<AppData>) -> DigestDriver<'a, E> {
+    pub fn new(engine: &'a E, container: Container<AppData>) -> DigestDriver<'a, E> {
         DigestDriver {
-            engine: TakeCell::new(engine),
+            engine: engine,
             apps: container,
             current_user: Cell::new(None),
         }
     }
 }
 
+impl<'a, E: DigestEngine> Client for DigestDriver<'a, E> {
+    fn done(&self, digest: &[u32]) {
+        self.current_user.get().map(|current_user| {
+            let _ = self.apps.enter(current_user, |app_data, _| {
+                app_data.output_buffer.as_mut().map(|mut output_buffer| {
+                    for (out, digest) in output_buffer.as_mut().chunks_mut(4).zip(digest) {
+                        let mut offset = 0;
+                        for o in out.iter_mut() {
+                            *o = (digest >> offset) as u8;
+                            offset += 8;
+                        }
+                    }
+                });
+
+                app_data.callback.map(|mut cb| {
+                    cb.schedule(0, 0, 0);
+                });
+            });
+        });
+    }
+}
+
 impl<'a, E: DigestEngine> Driver for DigestDriver<'a, E> {
+    fn subscribe(&self, subscribe_num: usize, callback: Callback) -> isize {
+        match subscribe_num {
+            0 => {
+                let _ = self.apps.enter(callback.app_id(), |app_data, _| {
+                    app_data.callback = Some(callback);
+                });
+                0
+            }
+            _ => -1,
+        }
+    }
+
     fn command(&self, minor_num: usize, r2: usize, caller_id: AppId) -> isize {
         match minor_num {
                 // Initialize hash engine (arg: digest mode)
@@ -54,9 +89,9 @@ impl<'a, E: DigestEngine> Driver for DigestDriver<'a, E> {
                                 _ => return Err(SyscallError::InvalidArgument),
                             };
 
-                            try!(try!(self.engine
-                                .map(|engine| engine.initialize(digest_mode))
-                                .ok_or(SyscallError::InternalError)));
+                            try!(self.engine
+                                .initialize(digest_mode)
+                                .map_err(|_| SyscallError::InternalError));
 
                             Ok(0)
                         })
@@ -85,9 +120,9 @@ impl<'a, E: DigestEngine> Driver for DigestDriver<'a, E> {
                                 return Err(SyscallError::OutOfRange);
                             }
 
-                            try!(try!(self.engine
-                                .map(|engine| engine.update(&input_buffer.as_ref()[..input_len]))
-                                .ok_or(SyscallError::InternalError)));
+                            try!(self.engine
+                                .update(&input_buffer.as_ref()[..input_len])
+                                .map_err(|_| SyscallError::InternalError));
 
                             Ok(0)
                         })
@@ -95,29 +130,15 @@ impl<'a, E: DigestEngine> Driver for DigestDriver<'a, E> {
                 }
                 // Finalize hash and output to output buffer (arg: unused)
                 2 => {
-                    self.apps
-                        .enter(caller_id, |app_data, _| {
-                            match self.current_user.get() {
-                                Some(cur) if cur.idx() == caller_id.idx() => {}
-                                _ => {
-                                    return Err(SyscallError::InvalidState);
-                                }
-                            }
-
-                            let app_data: &mut AppData = app_data;
-
-                            let output_buffer = match app_data.output_buffer {
-                                Some(ref mut slice) => slice,
-                                None => return Err(SyscallError::InvalidState),
-                            };
-
-                            try!(try!(self.engine
-                                .map(|engine| engine.finalize(output_buffer.as_mut()))
-                                .ok_or(SyscallError::InternalError)));
-
-                            Ok(0)
-                        })
-                        .unwrap_or(Err(SyscallError::InternalError))
+                    match self.current_user.get() {
+                        Some(cur) if cur.idx() == caller_id.idx() => {
+                            self.engine
+                                .finalize()
+                                .map(|_| 0)
+                                .map_err(|_| SyscallError::InternalError)
+                        }
+                        _ => Err(SyscallError::InvalidState),
+                    }
                 }
                 _ => Err(SyscallError::NotImplemented),
             }

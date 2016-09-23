@@ -1,4 +1,5 @@
-use hil::digest::{DigestEngine, DigestMode, DigestError};
+use core::cell::Cell;
+use hil::digest::{Client, DigestEngine, DigestMode, DigestError};
 use kernel::common::volatile_cell::VolatileCell;
 use super::KEYMGR0_BASE_ADDRESS;
 
@@ -29,11 +30,15 @@ struct U32OrU8(u32);
 
 impl U32OrU8 {
     pub fn write_u32(&self, word: u32) {
-        unsafe { ::core::intrinsics::volatile_store(&self.0 as *const _ as *const u32 as *mut u32, word) }
+        unsafe {
+            ::core::intrinsics::volatile_store(&self.0 as *const _ as *const u32 as *mut u32, word)
+        }
     }
 
     pub fn write_u8(&self, byte: u8) {
-        unsafe { ::core::intrinsics::volatile_store(&self.0 as *const _ as *const u8 as *mut u8, byte) }
+        unsafe {
+            ::core::intrinsics::volatile_store(&self.0 as *const _ as *const u8 as *mut u8, byte)
+        }
     }
 }
 
@@ -62,22 +67,46 @@ enum ShaCfgEnMask {
 
 pub struct ShaEngine {
     regs: *mut Registers,
-    current_mode: Option<DigestMode>,
+    current_mode: Cell<Option<DigestMode>>,
+    client: Cell<Option<&'static Client>>,
 }
 
 impl ShaEngine {
     const unsafe fn new(regs: *mut Registers) -> ShaEngine {
         ShaEngine {
             regs: regs,
-            current_mode: None,
+            current_mode: Cell::new(None),
+            client: Cell::new(None),
         }
+    }
+
+    pub fn set_client(&self, client: &'static Client) {
+        self.client.set(Some(client));
+    }
+
+    pub fn handle_interrupt(&self) {
+        let regs = unsafe { &*self.regs };
+        self.current_mode.get().map(|mode| {
+            let mut long_arr = [0; 256 / 8];
+            let buf = match mode {
+                DigestMode::Sha1 => &mut long_arr[0..160 / 8],
+                DigestMode::Sha256 => long_arr.as_mut(),
+            };
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = regs.sts_h[i % regs.sts_h.len()].get();
+            }
+            self.client.get().map(|client| client.done(buf));
+        });
+
+        // Mark interrupt handled
+        regs.itop.set(0);
     }
 }
 
 pub static mut KEYMGR0_SHA: ShaEngine = unsafe { ShaEngine::new(KEYMGR0_SHA_REGS) };
 
 impl DigestEngine for ShaEngine {
-    fn initialize(&mut self, mode: DigestMode) -> Result<(), DigestError> {
+    fn initialize(&self, mode: DigestMode) -> Result<(), DigestError> {
         let regs = unsafe { &*self.regs };
 
         // Compile-time check for DigestMode exhaustiveness
@@ -85,7 +114,7 @@ impl DigestEngine for ShaEngine {
             DigestMode::Sha1 |
             DigestMode::Sha256 => (),
         };
-        self.current_mode = Some(mode);
+        self.current_mode.set(Some(mode));
 
         regs.trig.set(ShaTrigMask::Stop as u32);
 
@@ -101,10 +130,10 @@ impl DigestEngine for ShaEngine {
         Ok(())
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<usize, DigestError> {
+    fn update(&self, data: &[u8]) -> Result<(), DigestError> {
         let regs = unsafe { &*self.regs };
 
-        if self.current_mode.is_none() {
+        if self.current_mode.get().is_none() {
             return Err(DigestError::NotConfigured);
         }
 
@@ -136,43 +165,30 @@ impl DigestEngine for ShaEngine {
                 // 4. We end up with `(accm, offset <= 32)`, but we only want
                 //    `accm`, so we get field `0` out of the tuple.
                 let d = word.iter()
-                            .map(|b| *b as u32).enumerate()
-                            .fold(0, |accm, (i, byte)| {
-                                accm | (byte << (i * 8))
-                            });
+                    .map(|b| *b as u32)
+                    .enumerate()
+                    .fold(0, |accm, (i, byte)| accm | (byte << (i * 8)));
                 regs.input_fifo.write_u32(d);
             }
         }
 
-        Ok(data.len())
+        Ok(())
     }
 
-    fn finalize(&mut self, output: &mut [u8]) -> Result<usize, DigestError> {
+    fn finalize(&self) -> Result<(), DigestError> {
         let regs = unsafe { &*self.regs };
 
-        let expected_output_size = match self.current_mode {
-            None => return Err(DigestError::NotConfigured),
-            Some(mode) => mode.output_size(),
-        };
-        if output.len() < expected_output_size {
-            return Err(DigestError::BufferTooSmall(expected_output_size));
+        match self.current_mode.get() {
+            None => Err(DigestError::NotConfigured),
+            Some(_) => {
+                // Tell hardware we're done streaming and then wait for the hash calculation to
+                // finish.
+                regs.cfg_en.set(regs.cfg_en.get() | 0b1 << 16);
+                println!("Setting...");
+                regs.trig.set(ShaTrigMask::Stop as u32);
+
+                Ok(())
+            }
         }
-
-        // Tell hardware we're done streaming and then wait for the hash calculation to finish.
-        regs.itop.set(0);
-        regs.trig.set(ShaTrigMask::Stop as u32);
-        while regs.itop.get() == 0 {}
-
-        for i in 0..(expected_output_size / 4) {
-            let word = regs.sts_h[i].get();
-            output[i * 4 + 0] = (word >> 0) as u8;
-            output[i * 4 + 1] = (word >> 8) as u8;
-            output[i * 4 + 2] = (word >> 16) as u8;
-            output[i * 4 + 3] = (word >> 24) as u8;
-        }
-
-        regs.itop.set(0);
-
-        Ok(expected_output_size)
     }
 }

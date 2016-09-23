@@ -1,4 +1,5 @@
 use cortexm3;
+use crypto;
 use gpio;
 use kernel::Chip;
 use timels;
@@ -31,7 +32,7 @@ impl Chip for Hotel {
         unsafe {
             while let Some(nvic_num) = cortexm3::nvic::next_pending() {
                 match nvic_num {
-                    110 => (), // KEYMGR0_DSHA_INT, currently polled
+                    110 => crypto::sha::KEYMGR0_SHA.handle_interrupt(),
                     111 => (), // KEYMGR0_SHA_WFIFO_FULL
 
                     159 => timels::Timels0.handle_interrupt(),

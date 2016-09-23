@@ -121,9 +121,10 @@ pub unsafe fn reset_handler() {
     let digest = static_init!(
         digest::DigestDriver<'static, hotel::crypto::sha::ShaEngine>,
         digest::DigestDriver::new(
-                &mut hotel::crypto::sha::KEYMGR0_SHA,
+                &hotel::crypto::sha::KEYMGR0_SHA,
                 kernel::Container::create()),
         16);
+    hotel::crypto::sha::KEYMGR0_SHA.set_client(digest);
 
     let platform = static_init!(Golf, Golf {
         console: console,
