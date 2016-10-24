@@ -21,6 +21,18 @@ int tock_digest_hash_finalize() {
   return command(HOTEL_DRIVER_DIGEST, TOCK_DIGEST_CMD_FINALIZE, 0);
 }
 
+int tock_digest_hash_subscribe(subscribe_cb callback, void* callback_args) {
+  return subscribe(HOTEL_DRIVER_DIGEST, 0, callback, callback_args);
+}
+
+static void tock_digest_hash_cb(
+                int unused1 __attribute__ ((unused)),
+                int unused2 __attribute__ ((unused)),
+                int unused3 __attribute__ ((unused)),
+                void* callback_args) {
+  *(bool*)callback_args = true;
+}
+
 int tock_digest_hash_easy(void* input_buf, size_t input_len,
                           void* output_buf, size_t output_len, TockDigestMode mode) {
   int ret = -1;
@@ -32,5 +44,13 @@ int tock_digest_hash_easy(void* input_buf, size_t input_len,
   if (ret < 0) return ret;
   ret = tock_digest_hash_update(input_len);
   if (ret < 0) return ret;
-  return tock_digest_hash_finalize();
+
+  bool cond = false;
+  ret = tock_digest_hash_subscribe(tock_digest_hash_cb, &cond);
+  if (ret < 0) return ret;
+
+  ret = tock_digest_hash_finalize();
+  if (ret < 0) return ret;
+  yield_for(&cond);
+  return 0;
 }
