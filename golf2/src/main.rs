@@ -9,6 +9,7 @@ extern crate kernel;
 
 #[macro_use]
 pub mod io;
+pub mod rng;
 
 pub mod digest;
 pub mod aes;
@@ -59,6 +60,7 @@ pub struct Golf {
     timer: &'static capsules::timer::TimerDriver<'static, hotel::timels::Timels>,
     digest: &'static digest::DigestDriver<'static, hotel::crypto::sha::ShaEngine>,
     aes: &'static aes::AesDriver<'static>,
+    trng: &'static rng::RngDriver<'static, hotel::trng::TRNG>,
 }
 
 #[no_mangle]
@@ -136,13 +138,20 @@ pub unsafe fn reset_handler() {
         16);
     hotel::crypto::aes::KEYMGR0_AES.set_client(aes);
 
+    hotel::trng::TRNG0.init();
+    let trng = static_init!(
+        rng::RngDriver<'static, hotel::trng::TRNG>,
+        rng::RngDriver::new(&mut hotel::trng::TRNG0),
+        4);
+
     let platform = static_init!(Golf, Golf {
         console: console,
         gpio: gpio,
         timer: timer,
         digest: digest,
         aes: aes,
-    }, 20);
+        trng: trng,
+    }, 24);
 
     hotel::usb::USB0.init(&mut hotel::usb::OUT_DESCRIPTORS,
                           &mut hotel::usb::OUT_BUFFERS,
@@ -152,6 +161,7 @@ pub unsafe fn reset_handler() {
                           None,
                           Some(0x0011),
                           Some(0x7788));
+
 
     let end = timerhs.now();
 
@@ -175,6 +185,7 @@ impl Platform for Golf {
             2 => f(Some(self.digest)),
             3 => f(Some(self.timer)),
             4 => f(Some(self.aes)),
+            5 => f(Some(self.trng)),
             _ => f(None),
         }
     }
