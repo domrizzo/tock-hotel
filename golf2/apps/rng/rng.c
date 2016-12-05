@@ -11,7 +11,7 @@ int main(void) {
   while (err == 0) {
     printf("Have some random bytes: 0x%lx\n\n", buf);
     delay_ms(1000);
-    err = allow(4, 0, &buf, 4);
+    err = allow(5, 0, &buf, 4);
   }
 
   return err;
