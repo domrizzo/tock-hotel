@@ -1,6 +1,7 @@
 //! Driver for the True Random Number Generator (TRNG).
 
-use hil::rng::Rng;
+use hil::rng::{Continue, Rng, RngClient};
+use kernel::common::take_cell::TakeCell;
 use kernel::common::volatile_cell::VolatileCell;
 
 #[allow(dead_code)]
@@ -119,11 +120,15 @@ pub static mut TRNG0: TRNG = unsafe { TRNG::new(TRNG0_BASE) };
 
 pub struct TRNG {
     regs: *mut Registers,
+    client: TakeCell<&'static RngClient>,
 }
 
 impl TRNG {
     const unsafe fn new(trng: *mut Registers) -> TRNG {
-        TRNG { regs: trng }
+        TRNG {
+            regs: trng,
+            client: TakeCell::empty(),
+        }
     }
 
     pub fn init(&self) {
@@ -138,20 +143,64 @@ impl TRNG {
         regs.power_down_b.set(1);
         regs.go_event.set(1);
     }
+
+    pub fn set_client<C: RngClient>(&mut self, client: &'static C) {
+        self.client.put(Some(client));
+    }
+
+    pub fn handle_interrupt(&self) {
+        let regs = unsafe { &*self.regs };
+
+        // Disable and clear the interrupt.
+        regs.interrupt_enable.set(0);
+        regs.interrupt_state.set(0x1);
+
+        self.client.map(|client| {
+            if let Continue::More = client.random_data_available(&mut Iter(self)) {
+                // Re-enable the interrupt since the client needs more data.
+                regs.interrupt_enable.set(0x1);
+            }
+        });
+    }
 }
 
 impl Rng for TRNG {
-    fn next_u32(&mut self) -> u32 {
+    fn get_data(&self) {
         let regs = unsafe { &*self.regs };
 
-        while regs.empty.get() > 0 {
+        if regs.empty.get() > 0 {
+            // Make sure the TRNG isn't stuck.
             if regs.fsm_state.get() & 0x8 != 0 {
-                // TRNG timed out, restart.
+                // TRNG timed out.  Restart.
                 regs.stop_work.set(1);
                 regs.go_event.set(1);
             }
-        }
 
-        regs.read_data.get()
+            // Enable interrupts so we know when there is random data ready.
+            regs.interrupt_enable.set(0x1);
+        } else {
+            self.client.map(|client| {
+                if let Continue::More = client.random_data_available(&mut Iter(self)) {
+                    regs.interrupt_enable.set(0x1);
+                }
+            });
+        }
     }
 }
+
+struct Iter<'a>(&'a TRNG);
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        let regs = unsafe { &*self.0.regs };
+
+        if regs.empty.get() == 0 {
+            Some(regs.read_data.get())
+        } else {
+            None
+        }
+    }
+}
+

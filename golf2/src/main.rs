@@ -60,7 +60,7 @@ pub struct Golf {
     timer: &'static capsules::timer::TimerDriver<'static, hotel::timels::Timels>,
     digest: &'static digest::DigestDriver<'static, hotel::crypto::sha::ShaEngine>,
     aes: &'static aes::AesDriver<'static>,
-    trng: &'static rng::RngDriver<'static, hotel::trng::TRNG>,
+    rng: &'static rng::RngDriver<'static, hotel::trng::TRNG>,
 }
 
 #[no_mangle]
@@ -139,10 +139,11 @@ pub unsafe fn reset_handler() {
     hotel::crypto::aes::KEYMGR0_AES.set_client(aes);
 
     hotel::trng::TRNG0.init();
-    let trng = static_init!(
+    let rng = static_init!(
         rng::RngDriver<'static, hotel::trng::TRNG>,
-        rng::RngDriver::new(&mut hotel::trng::TRNG0),
-        4);
+        rng::RngDriver::new(&mut hotel::trng::TRNG0, kernel::Container::create()),
+        8);
+    hotel::trng::TRNG0.set_client(rng);
 
     let platform = static_init!(Golf, Golf {
         console: console,
@@ -150,7 +151,7 @@ pub unsafe fn reset_handler() {
         timer: timer,
         digest: digest,
         aes: aes,
-        trng: trng,
+        rng: rng,
     }, 24);
 
     hotel::usb::USB0.init(&mut hotel::usb::OUT_DESCRIPTORS,
@@ -185,7 +186,7 @@ impl Platform for Golf {
             2 => f(Some(self.digest)),
             3 => f(Some(self.timer)),
             4 => f(Some(self.aes)),
-            5 => f(Some(self.trng)),
+            5 => f(Some(self.rng)),
             _ => f(None),
         }
     }
