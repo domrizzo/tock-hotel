@@ -37,36 +37,44 @@ impl<'a, G: Rng + 'a> RngDriver<'a, G> {
 impl<'a, G: Rng + 'a> Driver for RngDriver<'a, G> {
     /// Saves an application-provided buffer to be filled with random data.
     fn allow(&self, app_id: AppId, _: usize, slice: AppSlice<Shared, u8>) -> isize {
-        self.apps.enter(app_id, |app, _| {
-            app.buffer = Some(slice);
-            app.offset = 0;
-            0
-        }).unwrap_or(-1)
+        self.apps
+            .enter(app_id, |app, _| {
+                app.buffer = Some(slice);
+                app.offset = 0;
+                0
+            })
+            .unwrap_or(-1)
     }
 
     /// Saves an application-provided callback that will be used to notify
     /// the application when the provided buffer is full.
     fn subscribe(&self, _: usize, callback: Callback) -> isize {
-        self.apps.enter(callback.app_id(), |app, _| {
-            app.callback = Some(callback);
-            0
-        }).unwrap_or(-1)
+        self.apps
+            .enter(callback.app_id(), |app, _| {
+                app.callback = Some(callback);
+                0
+            })
+            .unwrap_or(-1)
     }
 
     /// Instructs the driver to begin filling the application-provided buffer with
     /// random data.  If the application has not provided both a buffer to fill and
     /// a notification callback this will return an error.
     fn command(&self, _: usize, _: usize, app_id: AppId) -> isize {
-        self.apps.enter(app_id, |app, _| {
-            if app.callback.is_none() || app.buffer.is_none() {
-                return -1;
-            }
+        self.apps
+            .enter(app_id, |app, _| {
+                if app.callback.is_none() || app.buffer.is_none() {
+                    return -1;
+                }
 
-            self.rng.map(|rng| {
-                rng.get_data();
-                0
-            }).unwrap_or(-1)
-        }).unwrap_or(-1)
+                self.rng
+                    .map(|rng| {
+                        rng.get_data();
+                        0
+                    })
+                    .unwrap_or(-1)
+            })
+            .unwrap_or(-1)
     }
 }
 
@@ -86,13 +94,13 @@ impl<'a, G: Rng + 'a> RngClient for RngDriver<'a, G> {
                     let buf: &mut [u8] = slice.as_mut();
                     while let Some(data) = iter.next() {
                         if app.offset >= buf.len() {
-                            break
+                            break;
                         }
 
                         let diff = buf.len() - app.offset;
                         let data = u32_to_byte_array(data);
                         if diff > 4 {
-                            buf[app.offset..app.offset+4].copy_from_slice(&data);
+                            buf[app.offset..app.offset + 4].copy_from_slice(&data);
                             app.offset += 4;
                         } else {
                             buf[app.offset..].copy_from_slice(&data[..diff]);
